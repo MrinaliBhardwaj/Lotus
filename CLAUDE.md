@@ -160,25 +160,23 @@ flag-and-discuss event, same as the invariants in §1.
 
 ## 4. Commands
 
-> Fill these in at scaffold time and keep them current — Claude Code relies on them.
-
 ```
 # env
-docker compose up -d            # Postgres+pgvector, Redis, MinIO
+docker compose up -d            # Postgres+pgvector, Redis, MinIO (bucket auto-created)
 cp .env.example .env
 
-# backend
-uv sync                         # or poetry install
-alembic upgrade head            # apply migrations
-uvicorn app.main:app --reload
-celery -A app.workers worker -l info
+# backend (uv manages the venv; prefix commands with `uv run`)
+uv sync
+uv run alembic upgrade head     # apply migrations
+uv run uvicorn app.main:app --reload
+uv run celery -A app.workers worker -l info
 
-# tests / quality
-pytest
-mypy app/                       # type check — must pass
-ruff check .                    # lint
+# tests / quality (same gate as CI)
+uv run pytest
+uv run mypy app/                # type check — must pass
+uv run ruff check .             # lint
 
-# frontend
+# frontend (Task 8)
 cd frontend && pnpm install && pnpm dev
 ```
 
