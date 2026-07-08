@@ -7,6 +7,20 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: lexa
+          POSTGRES_PASSWORD: lexa
+          POSTGRES_DB: lexa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lexa -d lexa"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
