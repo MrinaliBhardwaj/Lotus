@@ -74,6 +74,17 @@ class Settings(BaseSettings):
     embed_batch_size: int = 128  # texts per provider request (≤ provider max)
     embed_requests_per_minute: int = 300  # token-bucket ceiling on provider calls
 
+    # --- retrieval (Task 7: dense ∥ lexical → RRF → children → parents) ----------
+    retrieval_dense_k: int = 30
+    retrieval_lexical_k: int = 30
+    retrieval_rrf_k: int = 60  # the RRF constant; consumes ranks only (§2.1 #10)
+    retrieval_children_k: int = 12  # fused children kept before parent expansion
+    retrieval_max_sources: int = 6  # parents handed to the LLM as [S#] sources
+
+    # --- SSE progress (§2.1 #9) ---------------------------------------------------
+    progress_stream_timeout_seconds: int = 600
+    progress_poll_interval_seconds: float = 1.0  # DB-poll fallback when Redis is down
+
     # --- rate limiting (CLAUDE.md §2.1 #11) -------------------------------------
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 20  # per client IP

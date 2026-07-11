@@ -7,9 +7,11 @@ chain to it; those tests skip cleanly when no database is reachable. CI
 provides a pgvector/pg16 service so they always run there.
 """
 
+import asyncio
 import os
 import subprocess
 import sys
+import threading
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -114,6 +116,8 @@ def db_settings(migrated_db_url: str, tmp_path: Path) -> Settings:
         embedding_provider="fake",
         jwt_secret_key="test-secret-0123456789abcdef0123456789abcdef",
         rate_limit_enabled=False,
+        progress_stream_timeout_seconds=20,  # a broken stream fails fast in tests
+        progress_poll_interval_seconds=0.2,
     )
 
 
@@ -164,6 +168,17 @@ def captured_stages(
 
 
 @pytest.fixture
+async def async_db_session(migrated_db_url: str) -> AsyncIterator[AsyncSession]:
+    """A service-level async session on the migrated test DB (NullPool: one
+    loop per test)."""
+    engine = create_async_engine(migrated_db_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+    await engine.dispose()
+
+
+@pytest.fixture
 def inline_pipeline(
     monkeypatch: pytest.MonkeyPatch, db_settings: Settings
 ) -> list[JobStage]:
@@ -184,6 +199,18 @@ def inline_pipeline(
 
     def _run_stage(stage: JobStage, document_id: uuid_module.UUID) -> None:
         executed.append(stage)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _dispatch(stage, document_id)
+        else:
+            # enqueued from inside an async API handler: run the sync worker
+            # code in a real thread, as an actual Celery worker would
+            thread = threading.Thread(target=_dispatch, args=(stage, document_id))
+            thread.start()
+            thread.join()
+
+    def _dispatch(stage: JobStage, document_id: uuid_module.UUID) -> None:
         if stage is JobStage.VALIDATE:
             run_validate(document_id, settings=db_settings, storage=storage)
         elif stage is JobStage.PARSE:

@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUserId, DbSession, SettingsDep, StorageDep, upload_rate_limit
 from app.models import DocumentStatus
@@ -82,3 +83,21 @@ async def delete_document(
     document_id: uuid.UUID, user_id: CurrentUserId, session: DbSession, storage: StorageDep
 ) -> None:
     await documents_service.delete_document(session, storage, user_id, document_id)
+
+
+@router.get("/{document_id}/progress")
+async def document_progress(
+    document_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: DbSession,
+    settings: SettingsDep,
+) -> StreamingResponse:
+    from app.services.ingestion.progress import progress_stream
+
+    # ownership resolves (or 404s) BEFORE the stream opens
+    document = await documents_service.get_document(session, user_id, document_id)
+    return StreamingResponse(
+        progress_stream(session, settings, document),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

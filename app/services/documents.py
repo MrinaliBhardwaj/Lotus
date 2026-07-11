@@ -50,7 +50,7 @@ async def complete_document(
     user_id: uuid.UUID,
     document_id: uuid.UUID,
 ) -> IngestionJob:
-    document = await _get_owned(session, user_id, document_id)
+    document = await get_owned_document(session, user_id, document_id)
     if document.status is not DocumentStatus.UPLOADED:
         raise ConflictError("document is already finalized")
     if key_owner(document.s3_key) != user_id:
@@ -113,7 +113,7 @@ async def list_documents(session: AsyncSession, user_id: uuid.UUID) -> list[Docu
 async def get_document(
     session: AsyncSession, user_id: uuid.UUID, document_id: uuid.UUID
 ) -> Document:
-    return await _get_owned(session, user_id, document_id)
+    return await get_owned_document(session, user_id, document_id)
 
 
 async def delete_document(
@@ -121,7 +121,7 @@ async def delete_document(
 ) -> None:
     """Soft delete. ``doc_hash`` is cleared so the unique slot frees up for a
     re-upload; artifacts are reaped later with the row (documented P1 gap)."""
-    document = await _get_owned(session, user_id, document_id)
+    document = await get_owned_document(session, user_id, document_id)
     await session.execute(
         update(Document)
         .where(Document.id == document.id)
@@ -131,7 +131,7 @@ async def delete_document(
     await storage.delete(document.s3_key)
 
 
-async def _get_owned(
+async def get_owned_document(
     session: AsyncSession, user_id: uuid.UUID, document_id: uuid.UUID
 ) -> Document:
     """Tenant-scoped fetch (invariant 7). 404 for other tenants' documents —
