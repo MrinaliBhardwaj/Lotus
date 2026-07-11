@@ -53,6 +53,42 @@ def make_two_column_pdf() -> bytes:
     return bytes(data)
 
 
+def make_contract_pdf(section_count: int = 3, paragraphs_per_section: int = 5) -> bytes:
+    """A contract-shaped PDF: numbered headings (16pt bold), numbered
+    subsections (13pt bold), and 11pt body paragraphs, flowing across pages."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    y = 72.0
+
+    def put_heading(content: str, size: float) -> None:
+        nonlocal page, y
+        if y + size * 2 > 720:
+            page = doc.new_page(width=612, height=792)
+            y = 72.0
+        page.insert_text(fitz.Point(72, y + size), content, fontsize=size, fontname="hebo")
+        y += size * 2
+
+    def put_body(content: str, height: float = 120.0) -> None:
+        nonlocal page, y
+        if y + height > 720:
+            page = doc.new_page(width=612, height=792)
+            y = 72.0
+        page.insert_textbox(fitz.Rect(72, y, 540, y + height), content, fontsize=11)
+        y += height + 14
+
+    paragraph = (BODY_TEXT + " ") * 4
+    for s in range(1, section_count + 1):
+        put_heading(f"{s}. Section {s} Heading About Provisions", size=16)
+        for p in range(paragraphs_per_section):
+            put_body(f"S{s}P{p} {paragraph}")
+        put_heading(f"{s}.1 Subsection Detail And Carve-Outs", size=13)
+        for p in range(2):
+            put_body(f"S{s}sub{p} {paragraph}")
+    data = doc.tobytes()
+    doc.close()
+    return bytes(data)
+
+
 def make_table_pdf(rows: int = 3, cols: int = 3) -> bytes:
     """A page with body text plus a ruled table PyMuPDF's find_tables detects."""
     doc = fitz.open()

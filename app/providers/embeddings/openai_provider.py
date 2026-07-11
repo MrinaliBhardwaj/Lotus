@@ -7,6 +7,7 @@ import openai
 from app.core.config import Settings
 from app.core.exceptions import ProviderError
 from app.providers.embeddings.base import EmbeddingProvider
+from app.providers.embeddings.tokenizer import TiktokenTokenizer, Tokenizer
 
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
@@ -14,10 +15,16 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self._client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
         self._model = settings.embedding_model
         self._dimensions = settings.embedding_dimensions
+        # cl100k_base is the text-embedding-3-* tokenizer; lazy vocab load
+        self._tokenizer = TiktokenTokenizer("cl100k_base")
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def tokenizer(self) -> Tokenizer:
+        return self._tokenizer
 
     @property
     def version(self) -> str:

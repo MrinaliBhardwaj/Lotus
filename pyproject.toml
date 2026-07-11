@@ -21,6 +21,7 @@ dependencies = [
     "pymupdf>=1.28.0",
     "redis>=6.4.0",
     "sqlalchemy[asyncio]>=2.0.51",
+    "tiktoken>=0.13.0",
     "uvicorn[standard]>=0.50.2",
 ]
 

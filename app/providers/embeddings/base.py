@@ -7,11 +7,18 @@ selective; ``dimensions`` must match the pinned ``vector(N)`` column (§2.1 #5).
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
+from app.providers.embeddings.tokenizer import Tokenizer
+
 
 class EmbeddingProvider(ABC):
     @property
     @abstractmethod
     def model(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def tokenizer(self) -> Tokenizer:
+        """The tokenizer chunk sizes are measured with (pinned per provider)."""
 
     @property
     @abstractmethod

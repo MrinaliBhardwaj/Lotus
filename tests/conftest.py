@@ -164,6 +164,52 @@ def captured_stages(
 
 
 @pytest.fixture
+def inline_pipeline(
+    monkeypatch: pytest.MonkeyPatch, db_settings: Settings
+) -> list[JobStage]:
+    """Run the whole ingestion pipeline synchronously in-process: every stage
+    hand-off executes the stage function inline instead of hitting Celery."""
+    import uuid as uuid_module
+
+    from app.parsers.pymupdf_parser import PyMuPDFParser
+    from app.services.ingestion import pipeline as pipeline_module
+    from app.services.ingestion.chunking import run_chunk
+    from app.services.ingestion.parse import run_parse, run_parse_batch
+    from app.services.ingestion.structure import run_structure
+    from app.services.ingestion.validate import run_validate
+
+    storage = LocalStorage(db_settings.local_storage_path)
+    parser = PyMuPDFParser()
+    executed: list[JobStage] = []
+
+    def _run_stage(stage: JobStage, document_id: uuid_module.UUID) -> None:
+        executed.append(stage)
+        if stage is JobStage.VALIDATE:
+            run_validate(document_id, settings=db_settings, storage=storage)
+        elif stage is JobStage.PARSE:
+            run_parse(document_id, settings=db_settings)
+        elif stage is JobStage.STRUCTURE:
+            run_structure(document_id, settings=db_settings, storage=storage)
+        elif stage is JobStage.CHUNK:
+            run_chunk(document_id, settings=db_settings, storage=storage)
+        elif stage is JobStage.EMBED:
+            try:  # lands with Task 6
+                from app.services.ingestion.embed import run_embed
+            except ImportError:
+                return
+            run_embed(document_id, settings=db_settings, storage=storage)
+
+    def _run_batch(document_id: uuid_module.UUID, start: int, end: int) -> None:
+        run_parse_batch(
+            document_id, start, end, settings=db_settings, storage=storage, parser=parser
+        )
+
+    monkeypatch.setattr(pipeline_module, "enqueue_stage", _run_stage)
+    monkeypatch.setattr(pipeline_module, "enqueue_parse_batch", _run_batch)
+    return executed
+
+
+@pytest.fixture
 def sync_session_factory(migrated_db_url: str) -> Iterator[sessionmaker[Session]]:
     """Worker-style sync sessions bound to the test DB (§2.1 #7)."""
     sync_url = migrated_db_url.replace("+asyncpg", "+psycopg")

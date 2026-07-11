@@ -5,15 +5,21 @@ import math
 from collections.abc import Sequence
 
 from app.providers.embeddings.base import EmbeddingProvider
+from app.providers.embeddings.tokenizer import Tokenizer, WordTokenizer
 
 
 class FakeEmbeddingProvider(EmbeddingProvider):
     def __init__(self, dimensions: int = 1536) -> None:
         self._dimensions = dimensions
+        self._tokenizer = WordTokenizer()
 
     @property
     def model(self) -> str:
         return "fake-embedding-v1"
+
+    @property
+    def tokenizer(self) -> Tokenizer:
+        return self._tokenizer
 
     @property
     def version(self) -> str:

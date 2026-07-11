@@ -45,3 +45,17 @@ def parse_page_batch(document_id: str, page_start: int, page_end: int) -> None:
         storage=get_storage(),
         parser=PyMuPDFParser(),
     )
+
+
+@celery_app.task(name="lexa.structure_document")
+def structure_document(document_id: str) -> None:
+    from app.services.ingestion.structure import run_structure
+
+    run_structure(uuid.UUID(document_id), settings=get_settings(), storage=get_storage())
+
+
+@celery_app.task(name="lexa.chunk_document")
+def chunk_document(document_id: str) -> None:
+    from app.services.ingestion.chunking import run_chunk
+
+    run_chunk(uuid.UUID(document_id), settings=get_settings(), storage=get_storage())

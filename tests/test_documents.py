@@ -103,7 +103,9 @@ async def test_per_user_dedupe_conflict(
     assert ok.status_code == 202
 
 
-async def test_finalize_twice_conflicts(db_client: AsyncClient) -> None:
+async def test_finalize_twice_conflicts(
+    db_client: AsyncClient, captured_stages: list[tuple[JobStage, uuid.UUID]]
+) -> None:
     headers = await register(db_client)
     document_id = await create_and_upload(db_client, headers, make_pdf(pages=1))
     assert (

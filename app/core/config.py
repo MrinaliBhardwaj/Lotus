@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     max_pdf_pages: int = 1500  # DESIGN targets 500–1000-page docs; hard ceiling above that
     parse_batch_pages: int = 50  # pages per parallel parse task
 
+    # --- chunking (pinned at scaffold review: 300-token children, 12% overlap,
+    # measured with the embedding provider's tokenizer) -------------------------
+    chunk_child_tokens: int = 300
+    chunk_child_overlap_tokens: int = 36  # 12% of 300
+    chunk_parent_tokens: int = 2000
+
     # --- rate limiting (CLAUDE.md §2.1 #11) -------------------------------------
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 20  # per client IP
