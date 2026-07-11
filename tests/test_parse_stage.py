@@ -128,6 +128,50 @@ def test_parse_batch_rerun_is_idempotent(
     assert captured_stages == [(JobStage.STRUCTURE, document_id)]
 
 
+def test_run_parse_redelivery_merges_and_skips_completed_batches(
+    sync_session_factory: sessionmaker[Session],
+    storage: LocalStorage,
+    db_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A redelivered run_parse (acks_late) must MERGE the checkpoint, not
+    overwrite it with a stale snapshot — otherwise a batch that has already
+    parsed gets re-enqueued and re-parses the whole document (C4)."""
+    from app.services.ingestion import pipeline
+
+    enqueued: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        pipeline,
+        "enqueue_parse_batch",
+        lambda _doc, start, end: enqueued.append((start, end)),
+    )
+
+    # 60 pages / 50 per batch → batches (1, 50) and (51, 60)
+    document_id = seed_document(
+        sync_session_factory,
+        storage,
+        make_pdf(pages=60),
+        status=DocumentStatus.PARSING,
+        page_count=60,
+    )
+    run_parse(document_id, settings=db_settings)
+    assert enqueued == [(1, 50), (51, 60)]
+
+    # one batch actually completes and records itself; doc stays PARSING
+    enqueued.clear()
+    run_parse_batch(
+        document_id, 1, 50, settings=db_settings, storage=storage, parser=PyMuPDFParser()
+    )
+    _, job = load_state(sync_session_factory, document_id)
+    assert job is not None and job.checkpoint["batches_done"] == ["1-50"]
+
+    # redelivered run_parse: preserves "1-50", re-enqueues only the missing batch
+    run_parse(document_id, settings=db_settings)
+    _, job = load_state(sync_session_factory, document_id)
+    assert job is not None and "1-50" in job.checkpoint["batches_done"]  # not clobbered
+    assert enqueued == [(51, 60)]  # completed batch is NOT re-parsed
+
+
 def test_parse_is_noop_on_stale_status(
     sync_session_factory: sessionmaker[Session],
     storage: LocalStorage,

@@ -48,15 +48,28 @@ def run_parse(document_id: uuid.UUID, *, settings: Settings) -> None:
                 "document has no page count — validate stage did not run",
             )
             return
-        job = status.start_job_sync(session, document_id, JobStage.PARSE)
+        status.start_job_sync(session, document_id, JobStage.PARSE)
 
         batch = settings.parse_batch_pages
         batches = [
             (start, min(start + batch - 1, document.page_count))
             for start in range(1, document.page_count + 1, batch)
         ]
+        # Lock the job row before the read-modify-write so a redelivered
+        # run_parse (acks_late) can't lose-update progress that in-flight
+        # batches have already recorded — run_parse_batch takes the same
+        # FOR UPDATE lock at fan-in. MERGE batches_done, never overwrite:
+        # clobbering it back to a stale snapshot would force already-parsed
+        # batches to re-download and re-parse the whole document.
+        job = (
+            session.query(IngestionJob)
+            .filter_by(document_id=document_id, stage=JobStage.PARSE)
+            .with_for_update()
+            .one()
+        )
         done = set(job.checkpoint.get("batches_done", []))  # resume after a crash
         job.checkpoint = {
+            **job.checkpoint,
             "batches_total": len(batches),
             "batches_done": sorted(done),
         }
