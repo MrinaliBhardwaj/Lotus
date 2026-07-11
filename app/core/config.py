@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     chunk_child_overlap_tokens: int = 36  # 12% of 300
     chunk_parent_tokens: int = 2000
 
+    # --- embedding stage --------------------------------------------------------
+    embed_batch_size: int = 128  # texts per provider request (≤ provider max)
+    embed_requests_per_minute: int = 300  # token-bucket ceiling on provider calls
+
     # --- rate limiting (CLAUDE.md §2.1 #11) -------------------------------------
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 20  # per client IP

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.models import Document, DocumentStatus, IngestionJob, JobStage, JobState
+from app.services.ingestion import events
 
 
 async def transition_document(
@@ -33,7 +34,10 @@ async def transition_document(
             .values(status=new, **extra_values)
         ),
     )
-    return result.rowcount == 1
+    if result.rowcount == 1:
+        await events.publish_status_async(document_id, new.value)
+        return True
+    return False
 
 
 def transition_document_sync(
@@ -51,7 +55,10 @@ def transition_document_sync(
             .values(status=new, **extra_values)
         ),
     )
-    return result.rowcount == 1
+    if result.rowcount == 1:
+        events.publish_status_sync(document_id, new.value)
+        return True
+    return False
 
 
 def start_job_sync(session: Session, document_id: uuid.UUID, stage: JobStage) -> IngestionJob:
@@ -106,3 +113,4 @@ def fail_document_sync(
         update(Document).where(Document.id == document_id).values(status=DocumentStatus.FAILED)
     )
     session.commit()
+    events.publish_status_sync(document_id, DocumentStatus.FAILED.value)

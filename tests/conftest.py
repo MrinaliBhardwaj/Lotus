@@ -193,11 +193,13 @@ def inline_pipeline(
         elif stage is JobStage.CHUNK:
             run_chunk(document_id, settings=db_settings, storage=storage)
         elif stage is JobStage.EMBED:
-            try:  # lands with Task 6
-                from app.services.ingestion.embed import run_embed
-            except ImportError:
-                return
+            from app.services.ingestion.embed import run_embed
+
             run_embed(document_id, settings=db_settings, storage=storage)
+        elif stage is JobStage.INDEX:
+            from app.services.ingestion.embed import run_index
+
+            run_index(document_id, settings=db_settings)
 
     def _run_batch(document_id: uuid_module.UUID, start: int, end: int) -> None:
         run_parse_batch(

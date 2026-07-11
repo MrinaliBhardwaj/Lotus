@@ -61,7 +61,7 @@ def test_structure_and_chunk_stages_end_to_end(
 
     assert inline_pipeline[:3] == [JobStage.PARSE, JobStage.STRUCTURE, JobStage.CHUNK]
     document, chunk_job = load_state(sync_session_factory, document_id, JobStage.CHUNK)
-    assert document.status is DocumentStatus.EMBEDDING  # chunk handed off
+    assert document.status is DocumentStatus.READY  # chunk handed off; chain completed
     assert chunk_job is not None
     assert chunk_job.checkpoint["parents"] >= 6  # 3 sections + 3 subsections
     assert chunk_job.checkpoint["children"] > chunk_job.checkpoint["parents"]
@@ -144,7 +144,7 @@ def test_chunk_rerun_is_idempotent(
     # simulate a crash-requeue: force the doc back to CHUNKING and re-run
     with sync_session_factory() as session:
         assert transition_document_sync(
-            session, document_id, DocumentStatus.EMBEDDING, DocumentStatus.CHUNKING
+            session, document_id, DocumentStatus.READY, DocumentStatus.CHUNKING
         )
         session.commit()
     run_chunk(document_id, settings=db_settings, storage=storage)

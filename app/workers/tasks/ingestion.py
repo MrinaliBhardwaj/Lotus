@@ -59,3 +59,17 @@ def chunk_document(document_id: str) -> None:
     from app.services.ingestion.chunking import run_chunk
 
     run_chunk(uuid.UUID(document_id), settings=get_settings(), storage=get_storage())
+
+
+@celery_app.task(name="lexa.embed_document")
+def embed_document(document_id: str) -> None:
+    from app.services.ingestion.embed import run_embed
+
+    run_embed(uuid.UUID(document_id), settings=get_settings(), storage=get_storage())
+
+
+@celery_app.task(name="lexa.index_document")
+def index_document(document_id: str) -> None:
+    from app.services.ingestion.embed import run_index
+
+    run_index(uuid.UUID(document_id), settings=get_settings())

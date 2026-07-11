@@ -57,3 +57,27 @@ class FixedWindowLimiter:
 @lru_cache
 def get_limiter() -> FixedWindowLimiter:
     return FixedWindowLimiter(str(get_settings().redis_url))
+
+
+class SyncTokenBucket:
+    """Worker-side token bucket for outbound provider calls (Task 6 pin):
+    smooths embedding request bursts under the vendor's rate limit."""
+
+    def __init__(self, rate_per_minute: int, capacity: int | None = None) -> None:
+        self._rate_per_second = rate_per_minute / 60.0
+        self._capacity = float(capacity if capacity is not None else max(rate_per_minute // 10, 1))
+        self._tokens = self._capacity
+        self._updated = time.monotonic()
+
+    def acquire(self, tokens: int = 1) -> None:
+        """Block until ``tokens`` are available, then consume them."""
+        while True:
+            now = time.monotonic()
+            self._tokens = min(
+                self._capacity, self._tokens + (now - self._updated) * self._rate_per_second
+            )
+            self._updated = now
+            if self._tokens >= tokens:
+                self._tokens -= tokens
+                return
+            time.sleep((tokens - self._tokens) / self._rate_per_second)
