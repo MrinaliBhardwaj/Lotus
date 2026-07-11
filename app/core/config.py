@@ -62,6 +62,7 @@ class Settings(BaseSettings):
 
     # --- ingestion limits ------------------------------------------------------
     max_pdf_pages: int = 1500  # DESIGN targets 500–1000-page docs; hard ceiling above that
+    parse_batch_pages: int = 50  # pages per parallel parse task
 
     # --- rate limiting (CLAUDE.md §2.1 #11) -------------------------------------
     rate_limit_enabled: bool = True

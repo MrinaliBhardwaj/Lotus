@@ -3,58 +3,27 @@
 import asyncio
 import json
 import uuid
+from functools import partial
 from pathlib import Path
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
-from app.models import Document, DocumentStatus, IngestionJob, JobStage, JobState, User
+from app.models import DocumentStatus, JobStage, JobState
 from app.services.ingestion.validate import MANIFEST_ARTIFACT, run_validate
-from app.storage.base import artifact_key, document_key
+from app.storage.base import artifact_key
 from app.storage.local import LocalStorage
+from tests.db_utils import load_state as _load_state
+from tests.db_utils import seed_document
 from tests.pdf_utils import make_pdf
+
+load_state = partial(_load_state, stage=JobStage.VALIDATE)
 
 
 @pytest.fixture
 def storage(db_settings: Settings) -> LocalStorage:
     return LocalStorage(db_settings.local_storage_path)
-
-
-def seed_document(
-    factory: sessionmaker[Session],
-    storage: LocalStorage,
-    data: bytes,
-    *,
-    status: DocumentStatus = DocumentStatus.VALIDATING,
-) -> uuid.UUID:
-    with factory() as session:
-        user = User(email=f"{uuid.uuid4().hex}@example.com", hashed_pw="x")
-        session.add(user)
-        session.flush()
-        document = Document(user_id=user.id, title="T", s3_key="", status=status)
-        session.add(document)
-        session.flush()
-        document.s3_key = document_key(user.id, document.id)
-        session.commit()
-        key = document.s3_key
-        document_id = document.id
-    asyncio.run(storage.put(key, data, content_type="application/pdf"))
-    return document_id
-
-
-def load_state(
-    factory: sessionmaker[Session], document_id: uuid.UUID
-) -> tuple[Document, IngestionJob | None]:
-    with factory() as session:
-        document = session.get(Document, document_id)
-        assert document is not None
-        job = (
-            session.query(IngestionJob)
-            .filter_by(document_id=document_id, stage=JobStage.VALIDATE)
-            .one_or_none()
-        )
-        return document, job
 
 
 def test_validate_happy_path(

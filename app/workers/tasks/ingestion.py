@@ -23,3 +23,25 @@ def validate_document(document_id: str) -> None:
     from app.services.ingestion.validate import run_validate
 
     run_validate(uuid.UUID(document_id), settings=get_settings(), storage=get_storage())
+
+
+@celery_app.task(name="lexa.parse_document")
+def parse_document(document_id: str) -> None:
+    from app.services.ingestion.parse import run_parse
+
+    run_parse(uuid.UUID(document_id), settings=get_settings())
+
+
+@celery_app.task(name="lexa.parse_page_batch")
+def parse_page_batch(document_id: str, page_start: int, page_end: int) -> None:
+    from app.parsers.pymupdf_parser import PyMuPDFParser
+    from app.services.ingestion.parse import run_parse_batch
+
+    run_parse_batch(
+        uuid.UUID(document_id),
+        page_start,
+        page_end,
+        settings=get_settings(),
+        storage=get_storage(),
+        parser=PyMuPDFParser(),
+    )
