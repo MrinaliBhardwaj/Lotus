@@ -29,7 +29,11 @@ def create_app() -> FastAPI:
     # Middleware runs bottom-up: request-id first, then size cap, then CORS.
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                        allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_body_bytes)
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.max_request_body_bytes,
+        exempt_prefixes=("/local-uploads/",),
+    )
     app.add_middleware(RequestIdMiddleware)
 
     register_error_handlers(app)

@@ -1,7 +1,8 @@
 """Filesystem adapter for tests and keyless local dev.
 
-Presigned URLs are pseudo-URLs (``local://…``) — good enough for exercising the
-upload flow in tests; real presigning is exercised against MinIO/S3.
+"Presigned" upload URLs point at the API's ``PUT /local-uploads/{key}`` route
+(which enforces auth + key ownership), so the browser-side upload flow is the
+same shape as with real S3/MinIO presigning.
 """
 
 import asyncio
@@ -14,9 +15,10 @@ from app.storage.base import ObjectInfo, ObjectStorage
 
 
 class LocalStorage(ObjectStorage):
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, public_base_url: str = "") -> None:
         self._root = Path(root).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
+        self._public_base_url = public_base_url.rstrip("/")
 
     def _path(self, key: str) -> Path:
         path = (self._root / key).resolve()
@@ -29,11 +31,11 @@ class LocalStorage(ObjectStorage):
 
     async def presign_upload(self, key: str, *, content_type: str, expires_in: int) -> str:
         self._path(key)  # validate
-        return f"local://{key}"
+        return f"{self._public_base_url}/local-uploads/{key}"
 
     async def presign_download(self, key: str, *, expires_in: int) -> str:
         self._path(key)
-        return f"local://{key}"
+        return f"{self._public_base_url}/local-uploads/{key}"
 
     async def put(self, key: str, data: bytes, *, content_type: str) -> None:
         def _write() -> None:

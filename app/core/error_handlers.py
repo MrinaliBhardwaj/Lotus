@@ -12,6 +12,7 @@ from app.core.exceptions import (
     NotFoundError,
     PermissionDeniedError,
     ProviderError,
+    RateLimitedError,
     StorageError,
     ValidationFailedError,
 )
@@ -25,6 +26,7 @@ _STATUS_BY_EXC: dict[type[LexaError], int] = {
     NotFoundError: 404,
     ConflictError: 409,
     ValidationFailedError: 422,
+    RateLimitedError: 429,
     StorageError: 502,
     ProviderError: 502,
 }

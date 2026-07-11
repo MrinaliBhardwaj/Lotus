@@ -31,14 +31,19 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     """Reject oversized request bodies early (CLAUDE.md §2.1 #11).
 
     File uploads go browser → object storage directly and never pass through
-    the API, so this cap only needs to cover JSON bodies.
+    the API, so this cap only needs to cover JSON bodies. The one exception is
+    the local-dev upload route (``exempt_prefixes``), which enforces the much
+    larger upload ceiling itself.
     """
 
-    def __init__(self, app: object, max_bytes: int) -> None:
+    def __init__(self, app: object, max_bytes: int, exempt_prefixes: tuple[str, ...] = ()) -> None:
         super().__init__(app)  # type: ignore[arg-type]
         self._max_bytes = max_bytes
+        self._exempt_prefixes = exempt_prefixes
 
     async def dispatch(self, request: Request, call_next: CallNext) -> Response:
+        if request.url.path.startswith(self._exempt_prefixes):
+            return await call_next(request)
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:

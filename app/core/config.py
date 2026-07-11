@@ -56,7 +56,17 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     s3_presign_expiry_seconds: int = 900
     local_storage_path: str = ".localstorage"
+    # base URL prefixed to local-adapter upload URLs so a browser can PUT to them
+    local_public_base_url: str = "http://localhost:8000"
     max_upload_bytes: int = 500 * 1024 * 1024  # 500 MiB PDF ceiling
+
+    # --- ingestion limits ------------------------------------------------------
+    max_pdf_pages: int = 1500  # DESIGN targets 500–1000-page docs; hard ceiling above that
+
+    # --- rate limiting (CLAUDE.md §2.1 #11) -------------------------------------
+    rate_limit_enabled: bool = True
+    rate_limit_auth_per_minute: int = 20  # per client IP
+    rate_limit_upload_per_minute: int = 60  # per authenticated user
 
     # --- providers (pinned: CLAUDE.md §2.1 #5/#6) -----------------------------
     llm_provider: Literal["anthropic", "fake"] = "anthropic"

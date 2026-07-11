@@ -22,7 +22,7 @@ from app.storage.s3 import S3Storage
 
 def _build_storage(settings: Settings) -> ObjectStorage:
     if settings.storage_backend == "local":
-        return LocalStorage(settings.local_storage_path)
+        return LocalStorage(settings.local_storage_path, settings.local_public_base_url)
     return S3Storage(settings)
 
 

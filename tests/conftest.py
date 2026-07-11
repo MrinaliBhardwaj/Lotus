@@ -16,10 +16,17 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
+from app.models import JobStage
 from app.storage.local import LocalStorage
+from app.workers.session import set_session_factory
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ADMIN_DB_URL = os.environ.get(
@@ -89,3 +96,80 @@ async def client() -> AsyncIterator[AsyncClient]:
 @pytest.fixture
 def user_id() -> uuid.UUID:
     return uuid.uuid4()
+
+
+# --- DB-backed API fixtures (Tasks 3+) ----------------------------------------
+
+
+@pytest.fixture
+def db_settings(migrated_db_url: str, tmp_path: Path) -> Settings:
+    """Settings pointing every dependency at test-safe backends."""
+    return Settings(
+        app_env="test",
+        database_url=migrated_db_url,  # type: ignore[arg-type]
+        storage_backend="local",
+        local_storage_path=str(tmp_path / "storage"),
+        local_public_base_url="",  # relative upload URLs → same test client
+        llm_provider="fake",
+        embedding_provider="fake",
+        jwt_secret_key="test-secret-0123456789abcdef0123456789abcdef",
+        rate_limit_enabled=False,
+    )
+
+
+@pytest.fixture
+async def db_app(db_settings: Settings, migrated_db_url: str) -> AsyncIterator[FastAPI]:
+    """The real app wired to the migrated test database via dependency overrides.
+
+    NullPool: each test runs in its own event loop, and pooled asyncpg
+    connections must not leak across loops.
+    """
+    from app.core.config import get_settings
+    from app.db.session import get_db_session
+    from app.main import create_app
+
+    engine = create_async_engine(migrated_db_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with factory() as session:
+            yield session
+
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: db_settings
+    app.dependency_overrides[get_db_session] = _session
+    yield app
+    await engine.dispose()
+
+
+@pytest.fixture
+async def db_client(db_app: FastAPI) -> AsyncIterator[AsyncClient]:
+    transport = ASGITransport(app=db_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http_client:
+        yield http_client
+
+
+@pytest.fixture
+def captured_stages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[JobStage, uuid.UUID]]:
+    """Intercept Celery hand-offs so tests run without a broker."""
+    calls: list[tuple[JobStage, uuid.UUID]] = []
+
+    def _capture(stage: JobStage, document_id: uuid.UUID) -> None:
+        calls.append((stage, document_id))
+
+    monkeypatch.setattr("app.services.ingestion.pipeline.enqueue_stage", _capture)
+    return calls
+
+
+@pytest.fixture
+def sync_session_factory(migrated_db_url: str) -> Iterator[sessionmaker[Session]]:
+    """Worker-style sync sessions bound to the test DB (§2.1 #7)."""
+    sync_url = migrated_db_url.replace("+asyncpg", "+psycopg")
+    engine = create_engine(sync_url)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    set_session_factory(factory)
+    yield factory
+    set_session_factory(None)
+    engine.dispose()

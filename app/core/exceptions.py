@@ -34,6 +34,10 @@ class ConflictError(LexaError):
     """Resource already exists (e.g. per-user duplicate document hash)."""
 
 
+class RateLimitedError(LexaError):
+    """Caller exceeded a rate limit; retry after the window resets."""
+
+
 class StorageError(LexaError):
     """Object-storage operation failed."""
 
