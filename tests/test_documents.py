@@ -140,6 +140,25 @@ async def test_local_upload_rejects_foreign_key_prefix(db_client: AsyncClient) -
     assert forged.status_code == 403
 
 
+async def test_download_url_roundtrip(db_client: AsyncClient) -> None:
+    headers = await register(db_client)
+    pdf = make_pdf(pages=1)
+    document_id = await create_and_upload(db_client, headers, pdf)
+
+    response = await db_client.get(f"/documents/{document_id}/download-url", headers=headers)
+    assert response.status_code == 200
+    fetched = await db_client.get(response.json()["url"], headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.content == pdf
+
+    # another tenant can neither mint the URL nor fetch the object
+    headers_b = await register(db_client)
+    assert (
+        await db_client.get(f"/documents/{document_id}/download-url", headers=headers_b)
+    ).status_code == 404
+    assert (await db_client.get(response.json()["url"], headers=headers_b)).status_code == 403
+
+
 async def test_delete_document_soft_deletes(db_client: AsyncClient) -> None:
     headers = await register(db_client)
     document_id = await create_and_upload(db_client, headers, make_pdf(pages=1))

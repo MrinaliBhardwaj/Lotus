@@ -19,10 +19,11 @@ class FakeLLMProvider(LLMProvider):
         return "fake-llm-v1"
 
     def _answer(self, user: str) -> str:
+        question = user.rsplit("Question:", 1)[-1].strip() if "Question:" in user else user
         return (
             "Based on the provided sources, the agreement addresses this directly [S1]. "
             "A fabricated reference follows for validation testing [S99]. "
-            f"FAKE_ANSWER({user[:80]})"
+            f"FAKE_ANSWER({question[:80]})"
         )
 
     async def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> str:

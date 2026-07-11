@@ -85,6 +85,23 @@ async def delete_document(
     await documents_service.delete_document(session, storage, user_id, document_id)
 
 
+@router.get("/{document_id}/download-url")
+async def download_url(
+    document_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: DbSession,
+    storage: StorageDep,
+    settings: SettingsDep,
+) -> dict[str, str]:
+    """A short-lived URL the browser (PDF.js) fetches the raw PDF from —
+    presigned S3 in prod, the authenticated local route in dev."""
+    document = await documents_service.get_document(session, user_id, document_id)
+    url = await storage.presign_download(
+        document.s3_key, expires_in=settings.s3_presign_expiry_seconds
+    )
+    return {"url": url}
+
+
 @router.get("/{document_id}/progress")
 async def document_progress(
     document_id: uuid.UUID,
