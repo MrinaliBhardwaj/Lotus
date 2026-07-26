@@ -1,5 +1,6 @@
 """S3-compatible adapter (AWS S3, Cloudflare R2, or MinIO via endpoint_url)."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aioboto3
@@ -8,7 +9,7 @@ from botocore.exceptions import ClientError
 
 from app.core.config import Settings
 from app.core.exceptions import StorageError
-from app.storage.base import ObjectInfo, ObjectStorage
+from app.storage.base import STREAM_CHUNK_BYTES, ObjectInfo, ObjectStorage, PresignedUpload
 
 
 class S3Storage(ObjectStorage):
@@ -26,14 +27,23 @@ class S3Storage(ObjectStorage):
     def _client(self) -> Any:
         return self._session.client("s3", **self._client_kwargs)
 
-    async def presign_upload(self, key: str, *, content_type: str, expires_in: int) -> str:
+    async def presign_upload(
+        self, key: str, *, content_type: str, max_bytes: int, expires_in: int
+    ) -> PresignedUpload:
+        # presigned POST (not PUT) so the policy enforces the size ceiling
+        # server-side — a bare presigned PUT can't cap upload size (H2)
         async with self._client() as s3:
-            url: str = await s3.generate_presigned_url(
-                "put_object",
-                Params={"Bucket": self._bucket, "Key": key, "ContentType": content_type},
+            post = await s3.generate_presigned_post(
+                Bucket=self._bucket,
+                Key=key,
+                Fields={"Content-Type": content_type},
+                Conditions=[
+                    {"Content-Type": content_type},
+                    ["content-length-range", 0, max_bytes],
+                ],
                 ExpiresIn=expires_in,
             )
-            return url
+        return PresignedUpload(url=post["url"], method="POST", fields=post["fields"])
 
     async def presign_download(self, key: str, *, expires_in: int) -> str:
         async with self._client() as s3:
@@ -72,6 +82,18 @@ class S3Storage(ObjectStorage):
                 return body
             except ClientError as exc:
                 raise StorageError(f"range get failed for {key}") from exc
+
+    async def stream(
+        self, key: str, *, chunk_size: int = STREAM_CHUNK_BYTES
+    ) -> AsyncIterator[bytes]:
+        async with self._client() as s3:
+            try:
+                response = await s3.get_object(Bucket=self._bucket, Key=key)
+                async with response["Body"] as body:
+                    while chunk := await body.read(chunk_size):
+                        yield chunk
+            except ClientError as exc:
+                raise StorageError(f"stream failed for {key}") from exc
 
     async def head(self, key: str) -> ObjectInfo | None:
         async with self._client() as s3:

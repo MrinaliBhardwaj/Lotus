@@ -21,10 +21,14 @@ _MEMORY_MAX_KEYS = 4096
 
 
 class FixedWindowLimiter:
-    def __init__(self, redis_url: str) -> None:
+    def __init__(self, redis_url: str, retry_after_seconds: float = 30.0) -> None:
         self._redis_url = redis_url
+        self._retry_after = retry_after_seconds
         self._redis: aioredis.Redis | None = None
-        self._redis_broken = False
+        # 0.0 means "not degraded"; otherwise the monotonic time to retry Redis.
+        # Time-boxed, so a transient blip doesn't latch us to per-process memory
+        # for the life of the process (M1) — limits self-heal across replicas.
+        self._redis_retry_at = 0.0
         self._memory: dict[str, int] = {}
 
     async def hit(self, key: str, limit: int, window_seconds: int) -> None:
@@ -35,7 +39,7 @@ class FixedWindowLimiter:
             raise RateLimitedError("rate limit exceeded — retry shortly")
 
     async def _incr(self, bucket: str, *, ttl: int) -> int:
-        if not self._redis_broken:
+        if self._redis_retry_at <= time.monotonic():
             try:
                 if self._redis is None:
                     self._redis = aioredis.from_url(  # type: ignore[no-untyped-call]
@@ -44,10 +48,15 @@ class FixedWindowLimiter:
                 count = int(await self._redis.incr(bucket))
                 if count == 1:
                     await self._redis.expire(bucket, ttl)
+                self._redis_retry_at = 0.0  # recovered
                 return count
             except (aioredis.RedisError, OSError):
-                self._redis_broken = True
-                logger.warning("redis unreachable — rate limiting degraded to per-process memory")
+                self._redis = None  # drop the dead client; rebuild on retry
+                self._redis_retry_at = time.monotonic() + self._retry_after
+                logger.warning(
+                    "redis unreachable — rate limiting on per-process memory for %.0fs",
+                    self._retry_after,
+                )
         if len(self._memory) > _MEMORY_MAX_KEYS:  # old windows never get hit again; drop them
             self._memory.clear()
         self._memory[bucket] = self._memory.get(bucket, 0) + 1
@@ -56,7 +65,10 @@ class FixedWindowLimiter:
 
 @lru_cache
 def get_limiter() -> FixedWindowLimiter:
-    return FixedWindowLimiter(str(get_settings().redis_url))
+    settings = get_settings()
+    return FixedWindowLimiter(
+        str(settings.redis_url), retry_after_seconds=settings.rate_limit_redis_retry_seconds
+    )
 
 
 class SyncTokenBucket:

@@ -44,3 +44,7 @@ class StorageError(LexaError):
 
 class ProviderError(LexaError):
     """LLM/embedding provider call failed."""
+
+
+class ParserError(LexaError):
+    """A document could not be parsed — malformed, or exceeds a safety ceiling."""

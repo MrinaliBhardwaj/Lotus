@@ -102,7 +102,7 @@ export default function DocumentsPage() {
         method: "POST",
         body: JSON.stringify({ title: file.name }),
       });
-      await uploadToPresignedUrl(created.upload_url, file);
+      await uploadToPresignedUrl(created, file);
       await api(`/documents/${created.id}/complete`, { method: "POST" });
       await refresh();
       watchProgress(created.id);

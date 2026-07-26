@@ -2,10 +2,16 @@
 
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import CurrentUserId, DbSession, SettingsDep
+from app.api.deps import (
+    CurrentUserId,
+    DbSession,
+    SessionFactory,
+    SettingsDep,
+    chat_rate_limit,
+)
 from app.schemas.chats import ChatCreateRequest, ChatOut, MessageCreateRequest, MessageOut
 from app.services import chats as chats_service
 
@@ -35,18 +41,20 @@ async def list_messages(
     return [MessageOut.model_validate(m) for m in messages]
 
 
-@router.post("/{chat_id}/messages")
+@router.post("/{chat_id}/messages", dependencies=[Depends(chat_rate_limit)])
 async def ask(
     chat_id: uuid.UUID,
     body: MessageCreateRequest,
     user_id: CurrentUserId,
     session: DbSession,
+    factory: SessionFactory,
     settings: SettingsDep,
 ) -> StreamingResponse:
     # ownership/READY/retrieval run BEFORE the stream opens so failures are
-    # real HTTP errors; only the LLM stream itself happens inside the response
+    # real HTTP errors; only the LLM stream itself happens inside the response,
+    # persisting through a short-lived session from ``factory`` (H1/M2)
     chat, sources = await chats_service.prepare_ask(
         session, settings, user_id, chat_id, body.content
     )
-    generator = chats_service.stream_answer(session, settings, chat, sources, body.content)
+    generator = chats_service.stream_answer(factory, settings, chat, sources, body.content)
     return StreamingResponse(generator, media_type="text/event-stream", headers=_SSE_HEADERS)

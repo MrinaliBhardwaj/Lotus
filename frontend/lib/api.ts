@@ -44,17 +44,29 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
-/** PUT the file to the presigned URL. The Authorization header is attached
- * only for the API's own local-dev upload route — a real S3 presigned URL
- * must never receive it. */
-export async function uploadToPresignedUrl(url: string, file: File): Promise<void> {
-  const target = url.startsWith("http") ? url : `${API_BASE}${url}`;
+/** Upload the file directly to storage. S3 returns a POST with policy fields
+ * (which enforce the size ceiling server-side); the local dev route takes a
+ * PUT. The Authorization header is attached only to the API's own local route
+ * — a real S3 presigned upload must never receive it. */
+export async function uploadToPresignedUrl(upload: DocumentCreateResponse, file: File): Promise<void> {
+  const target = upload.upload_url.startsWith("http")
+    ? upload.upload_url
+    : `${API_BASE}${upload.upload_url}`;
   const isLocalRoute = target.startsWith(`${API_BASE}/local-uploads/`);
-  const response = await fetch(target, {
-    method: "PUT",
-    body: file,
-    headers: isLocalRoute ? authHeaders() : {},
-  });
+
+  let response: Response;
+  if (upload.upload_method === "POST") {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(upload.upload_fields)) form.append(key, value);
+    form.append("file", file); // must be last for S3
+    response = await fetch(target, { method: "POST", body: form });
+  } else {
+    response = await fetch(target, {
+      method: "PUT",
+      body: file,
+      headers: isLocalRoute ? authHeaders() : {},
+    });
+  }
   if (!response.ok) throw new ApiError(response.status, "upload failed");
 }
 
@@ -83,6 +95,8 @@ export interface DocumentCreateResponse {
   id: string;
   title: string;
   upload_url: string;
+  upload_method: string;
+  upload_fields: Record<string, string>;
 }
 
 export interface ChatOut {

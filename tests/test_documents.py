@@ -135,9 +135,9 @@ async def test_local_upload_rejects_foreign_key_prefix(db_client: AsyncClient) -
     headers_b = await register(db_client)
     created = await db_client.post("/documents", json={"title": "A"}, headers=headers_a)
     upload_url = created.json()["upload_url"]
-    # B tries to PUT into A's tenant prefix
+    # B tries to PUT into A's tenant prefix — 404, never confirm the key exists
     forged = await db_client.put(upload_url, content=b"%PDF-fake", headers=headers_b)
-    assert forged.status_code == 403
+    assert forged.status_code == 404
 
 
 async def test_download_url_roundtrip(db_client: AsyncClient) -> None:
@@ -156,7 +156,7 @@ async def test_download_url_roundtrip(db_client: AsyncClient) -> None:
     assert (
         await db_client.get(f"/documents/{document_id}/download-url", headers=headers_b)
     ).status_code == 404
-    assert (await db_client.get(response.json()["url"], headers=headers_b)).status_code == 403
+    assert (await db_client.get(response.json()["url"], headers=headers_b)).status_code == 404
 
 
 async def test_delete_document_soft_deletes(db_client: AsyncClient) -> None:

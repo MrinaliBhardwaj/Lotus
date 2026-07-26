@@ -37,13 +37,17 @@ def parse_page_batch(document_id: str, page_start: int, page_end: int) -> None:
     from app.parsers.pymupdf_parser import PyMuPDFParser
     from app.services.ingestion.parse import run_parse_batch
 
+    settings = get_settings()
     run_parse_batch(
         uuid.UUID(document_id),
         page_start,
         page_end,
-        settings=get_settings(),
+        settings=settings,
         storage=get_storage(),
-        parser=PyMuPDFParser(),
+        parser=PyMuPDFParser(
+            max_blocks_per_page=settings.parse_max_blocks_per_page,
+            max_chars_per_page=settings.parse_max_chars_per_page,
+        ),
     )
 
 

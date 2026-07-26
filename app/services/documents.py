@@ -17,9 +17,8 @@ from app.core.config import Settings
 from app.core.exceptions import ConflictError, NotFoundError, ValidationFailedError
 from app.models import Document, DocumentStatus, IngestionJob, JobStage
 from app.services.ingestion import pipeline, status
-from app.storage.base import ObjectStorage, document_key, key_owner
+from app.storage.base import ObjectStorage, PresignedUpload, document_key, key_owner
 
-_HASH_RANGE_BYTES = 8 * 1024 * 1024
 _PDF_MAGIC = b"%PDF-"  # per spec, must appear within the first 1024 bytes
 
 
@@ -29,18 +28,19 @@ async def create_document(
     settings: Settings,
     user_id: uuid.UUID,
     title: str,
-) -> tuple[Document, str]:
+) -> tuple[Document, PresignedUpload]:
     document = Document(user_id=user_id, title=title, s3_key="", status=DocumentStatus.UPLOADED)
     session.add(document)
     await session.flush()  # server-generated id needed for the tenant-prefixed key
     document.s3_key = document_key(user_id, document.id)
     await session.commit()
-    upload_url = await storage.presign_upload(
+    upload = await storage.presign_upload(
         document.s3_key,
         content_type="application/pdf",
+        max_bytes=settings.max_upload_bytes,
         expires_in=settings.s3_presign_expiry_seconds,
     )
-    return document, upload_url
+    return document, upload
 
 
 async def complete_document(
@@ -71,7 +71,7 @@ async def complete_document(
         await storage.delete(document.s3_key)
         raise ValidationFailedError("file is not a PDF")
 
-    doc_hash = await _sha256_of(storage, document.s3_key, info.size_bytes)
+    doc_hash = await _sha256_of(storage, document.s3_key)
     s3_key = document.s3_key  # rollback() expires the instance; don't touch it after
 
     try:
@@ -142,11 +142,9 @@ async def get_owned_document(
     return document
 
 
-async def _sha256_of(storage: ObjectStorage, key: str, size_bytes: int) -> str:
+async def _sha256_of(storage: ObjectStorage, key: str) -> str:
+    # single streamed read (L1): no full in-memory copy, no per-range client churn
     digest = hashlib.sha256()
-    offset = 0
-    while offset < size_bytes:
-        end = min(offset + _HASH_RANGE_BYTES, size_bytes) - 1
-        digest.update(await storage.get_range(key, offset, end))
-        offset = end + 1
+    async for chunk in storage.stream(key):
+        digest.update(chunk)
     return digest.hexdigest()

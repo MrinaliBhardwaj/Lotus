@@ -211,3 +211,109 @@ async def test_chat_requires_ready_document(
     )
     assert response.status_code == 422
     assert "not ready" in response.json()["detail"]
+
+
+async def test_ask_records_estimated_token_usage(
+    db_client: AsyncClient,
+    sync_session_factory: sessionmaker[Session],
+    db_settings: Settings,
+    inline_pipeline: list[JobStage],
+) -> None:
+    from sqlalchemy import select
+
+    from app.models import Message, MessageRole
+
+    headers = await register(db_client)
+    document_id = await create_and_upload(db_client, headers, make_contract_pdf())
+    await db_client.post(f"/documents/{document_id}/complete", headers=headers)
+    chat = await db_client.post("/chats", json={"document_id": document_id}, headers=headers)
+    chat_id = uuid.UUID(chat.json()["id"])
+    await db_client.post(
+        f"/chats/{chat_id}/messages", json={"content": "obligations?"}, headers=headers
+    )
+
+    with sync_session_factory() as session:
+        assistant = session.scalars(
+            select(Message).where(
+                Message.chat_id == chat_id, Message.role == MessageRole.ASSISTANT
+            )
+        ).one()
+    usage = assistant.token_usage
+    assert usage is not None
+    assert usage["prompt_tokens"] > 0 and usage["completion_tokens"] > 0  # real counts (M7)
+    assert usage["estimated"] is True and usage["aborted"] is False
+
+
+async def test_ask_is_rate_limited(
+    db_client: AsyncClient,
+    db_settings: Settings,
+    sync_session_factory: sessionmaker[Session],
+    inline_pipeline: list[JobStage],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core import ratelimit
+    from app.core.ratelimit import FixedWindowLimiter
+
+    # one shared limiter with a low ceiling — every ask costs an embedding +
+    # an LLM call, so this is the spend guard (C1)
+    limiter = FixedWindowLimiter("redis://127.0.0.1:1")
+    monkeypatch.setattr(ratelimit, "get_limiter", lambda: limiter)
+    db_settings.rate_limit_enabled = True
+    db_settings.rate_limit_chat_per_minute = 1
+
+    headers = await register(db_client)
+    document_id = await create_and_upload(db_client, headers, make_contract_pdf(2, 3))
+    await db_client.post(f"/documents/{document_id}/complete", headers=headers)
+    chat = await db_client.post("/chats", json={"document_id": document_id}, headers=headers)
+    chat_id = chat.json()["id"]
+
+    first = await db_client.post(
+        f"/chats/{chat_id}/messages", json={"content": "one"}, headers=headers
+    )
+    second = await db_client.post(
+        f"/chats/{chat_id}/messages", json={"content": "two"}, headers=headers
+    )
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+async def test_stream_answer_persists_on_early_disconnect(
+    async_db_session: AsyncSession,
+    sync_session_factory: sessionmaker[Session],
+    db_settings: Settings,
+    inline_pipeline: list[JobStage],
+) -> None:
+    """A client that disconnects mid-stream must still leave a persisted
+    assistant message (marked aborted), never a user turn with no reply (M2)."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.models import Chat, Message, MessageRole
+    from app.services import chats as chats_service
+
+    owner_id, document_id = await _ingest(sync_session_factory, db_settings)
+    chat = Chat(user_id=owner_id, document_id=document_id, title="t")
+    async_db_session.add(chat)
+    await async_db_session.commit()
+    sources = await retrieve_sources(
+        async_db_session, db_settings, owner_id, document_id, "obligations"
+    )
+
+    engine = create_async_engine(
+        str(db_settings.database_url).replace("+psycopg", "+asyncpg"), poolclass=NullPool
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    gen = chats_service.stream_answer(factory, db_settings, chat, sources, "obligations?")
+    await gen.__anext__()  # sources event
+    await gen.__anext__()  # first delta, then simulate a disconnect
+    await gen.aclose()  # triggers the finally-persist
+
+    with sync_session_factory() as session:
+        message = session.scalars(
+            select(Message).where(
+                Message.chat_id == chat.id, Message.role == MessageRole.ASSISTANT
+            )
+        ).one()
+    assert message.token_usage is not None and message.token_usage["aborted"] is True
+    await engine.dispose()

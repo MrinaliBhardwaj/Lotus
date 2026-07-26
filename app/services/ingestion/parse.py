@@ -13,9 +13,12 @@ and the checkpoint set ignores duplicates (§2.1 #8).
 
 import asyncio
 import logging
+import tempfile
 import uuid
+from pathlib import Path
 
 from app.core.config import Settings
+from app.core.exceptions import ParserError
 from app.models import Document, DocumentStatus, IngestionJob, JobStage, JobState
 from app.parsers.base import PDFParser
 from app.schemas.ir import LinearizedBlock, LinearizedText, PageIR
@@ -96,8 +99,18 @@ def run_parse_batch(
             return
         user_id, s3_key = document.user_id, document.s3_key
 
-    data = asyncio.run(storage.get(s3_key))
-    pages = parser.parse_pages(data, range(page_start, page_end + 1))
+    # stream the PDF to a temp file and mmap it (H4 — no full in-memory copy);
+    # a poison page that trips a ceiling fails the document instead of retrying
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
+        tmp_path = Path(tmp.name)
+        asyncio.run(storage.download_to_path(s3_key, tmp_path))
+        try:
+            pages = parser.parse_file(tmp_path, range(page_start, page_end + 1))
+        except ParserError as exc:
+            with worker_session() as session:
+                job = status.start_job_sync(session, document_id, JobStage.PARSE)
+                status.fail_document_sync(session, document_id, job, str(exc))
+            return
     for page_ir in pages:
         asyncio.run(
             storage.put(

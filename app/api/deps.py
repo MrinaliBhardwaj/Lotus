@@ -11,20 +11,31 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core import ratelimit
 from app.core.config import Settings, get_settings
 from app.core.deps import get_storage
 from app.core.exceptions import AuthenticationError
 from app.core.security import decode_access_token
-from app.db.session import get_db_session
+from app.db.session import get_async_session_factory, get_db_session
 from app.storage.base import ObjectStorage
 
 _bearer = HTTPBearer(auto_error=False)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Session factory for streaming endpoints that must NOT hold a
+    request-scoped connection for the life of the stream (H1). They open a
+    short-lived session per DB touch instead. Overridable in tests so the
+    factory points at the test engine, same as ``get_db_session``."""
+    return get_async_session_factory()
+
+
+SessionFactory = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]
 
 
 async def get_current_user_id(
@@ -64,4 +75,14 @@ async def upload_rate_limit(user_id: CurrentUserId, settings: SettingsDep) -> No
         return
     await ratelimit.get_limiter().hit(
         f"upload:{user_id}", settings.rate_limit_upload_per_minute, window_seconds=60
+    )
+
+
+async def chat_rate_limit(user_id: CurrentUserId, settings: SettingsDep) -> None:
+    """Per-user limit on the ask endpoint — every call costs an embedding plus
+    an LLM completion, so this is the primary spend/abuse control (C1)."""
+    if not settings.rate_limit_enabled:
+        return
+    await ratelimit.get_limiter().hit(
+        f"chat:{user_id}", settings.rate_limit_chat_per_minute, window_seconds=60
     )

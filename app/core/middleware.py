@@ -28,6 +28,24 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Baseline hardening headers on every response (L5). The API serves JSON,
+    so a restrictive CSP and framing/sniffing denials are cheap and correct."""
+
+    _HEADERS = {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    }
+
+    async def dispatch(self, request: Request, call_next: CallNext) -> Response:
+        response = await call_next(request)
+        for name, value in self._HEADERS.items():
+            response.headers.setdefault(name, value)
+        return response
+
+
 class _BodyTooLarge(Exception):
     """Raised from the wrapped receive channel once the cap is exceeded."""
 

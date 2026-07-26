@@ -6,15 +6,21 @@ chunker), reconstruct multi-column reading order, and normalize every bbox
 to 0–1 fractions of the page size (invariant 2).
 """
 
+import logging
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import fitz
 
+from app.core.exceptions import ParserError
 from app.parsers.base import PDFParser
 from app.schemas.ir import BlockIR, PageIR
+
+logger = logging.getLogger(__name__)
 
 _BOLD_FLAG = 1 << 4  # fitz span flag bit for bold
 # a block wider than this fraction of the page can't belong to one column
@@ -32,20 +38,58 @@ class _RawBlock:
 
 
 class PyMuPDFParser(PDFParser):
+    def __init__(
+        self, max_blocks_per_page: int = 10_000, max_chars_per_page: int = 2_000_000
+    ) -> None:
+        # poison-input ceilings (H3): a crafted page can be under the page limit
+        # yet explode extraction memory — cap it and fail cleanly.
+        self._max_blocks = max_blocks_per_page
+        self._max_chars = max_chars_per_page
+
     def parse_pages(self, pdf_bytes: bytes, page_numbers: Sequence[int]) -> list[PageIR]:
+        with self._open(stream=pdf_bytes) as pdf:
+            return self._parse(pdf, page_numbers)
+
+    def parse_file(self, path: Path, page_numbers: Sequence[int]) -> list[PageIR]:
+        # open by path so PyMuPDF mmaps the file instead of holding the whole
+        # PDF in RAM (H4)
+        with self._open(filename=str(path)) as pdf:
+            return self._parse(pdf, page_numbers)
+
+    @contextmanager
+    def _open(self, **kwargs: Any) -> Iterator[fitz.Document]:
+        try:
+            pdf = fitz.open(filetype="pdf", **kwargs)
+        except Exception as exc:  # malformed container
+            raise ParserError("document could not be opened as a PDF") from exc
+        try:
+            yield pdf
+        finally:
+            pdf.close()
+
+    def _parse(self, pdf: fitz.Document, page_numbers: Sequence[int]) -> list[PageIR]:
         results: list[PageIR] = []
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
-            for number in page_numbers:
-                page = pdf[number - 1]
-                results.append(self._parse_page(page, number))
+        for number in page_numbers:
+            page = pdf[number - 1]
+            results.append(self._parse_page(page, number))
         return results
 
     def _parse_page(self, page: fitz.Page, number: int) -> PageIR:
         width, height = float(page.rect.width), float(page.rect.height)
         table_rects, table_blocks = self._extract_tables(page)
         raw_blocks = table_blocks + self._extract_text_blocks(page, table_rects)
-        ordered = _reading_order(raw_blocks, width)
 
+        if len(raw_blocks) > self._max_blocks:
+            raise ParserError(
+                f"page {number} has {len(raw_blocks)} blocks (limit {self._max_blocks})"
+            )
+        total_chars = sum(len(block.text) for block in raw_blocks)
+        if total_chars > self._max_chars:
+            raise ParserError(
+                f"page {number} has {total_chars} extracted chars (limit {self._max_chars})"
+            )
+
+        ordered = _reading_order(raw_blocks, width)
         blocks = [
             BlockIR(
                 id=f"b-{number}-{index}",
@@ -64,7 +108,12 @@ class PyMuPDFParser(PDFParser):
     def _extract_tables(self, page: fitz.Page) -> tuple[list[fitz.Rect], list[_RawBlock]]:
         rects: list[fitz.Rect] = []
         blocks: list[_RawBlock] = []
-        for table in page.find_tables().tables:
+        try:
+            tables = page.find_tables().tables
+        except Exception:  # table detection is best-effort; never abort the page
+            logger.warning("table detection failed on a page — continuing without tables")
+            return rects, blocks
+        for table in tables:
             rows = table.extract()
             text = "\n".join(
                 " | ".join("" if cell is None else str(cell).strip() for cell in row)

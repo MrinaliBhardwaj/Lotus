@@ -5,7 +5,14 @@ import uuid
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import CurrentUserId, DbSession, SettingsDep, StorageDep, upload_rate_limit
+from app.api.deps import (
+    CurrentUserId,
+    DbSession,
+    SessionFactory,
+    SettingsDep,
+    StorageDep,
+    upload_rate_limit,
+)
 from app.models import DocumentStatus
 from app.schemas.documents import (
     DocumentCompleteResponse,
@@ -31,13 +38,15 @@ async def create_document(
     storage: StorageDep,
     settings: SettingsDep,
 ) -> DocumentCreateResponse:
-    document, upload_url = await documents_service.create_document(
+    document, upload = await documents_service.create_document(
         session, storage, settings, user_id, body.title
     )
     return DocumentCreateResponse(
         id=document.id,
         title=document.title,
-        upload_url=upload_url,
+        upload_url=upload.url,
+        upload_method=upload.method,
+        upload_fields=upload.fields,
         upload_expires_in=settings.s3_presign_expiry_seconds,
         max_upload_bytes=settings.max_upload_bytes,
     )
@@ -107,14 +116,17 @@ async def document_progress(
     document_id: uuid.UUID,
     user_id: CurrentUserId,
     session: DbSession,
+    factory: SessionFactory,
     settings: SettingsDep,
 ) -> StreamingResponse:
     from app.services.ingestion.progress import progress_stream
 
-    # ownership resolves (or 404s) BEFORE the stream opens
+    # ownership resolves (or 404s) BEFORE the stream opens; the request session
+    # is released here — the stream uses short-lived sessions via ``factory`` so
+    # it never pins a pooled connection for its (up to 10-minute) life (H1).
     document = await documents_service.get_document(session, user_id, document_id)
     return StreamingResponse(
-        progress_stream(session, settings, document),
+        progress_stream(factory, settings, document.id, document.status),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

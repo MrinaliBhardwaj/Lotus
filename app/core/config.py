@@ -17,7 +17,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "lexa"
-    app_env: Literal["dev", "test", "prod"] = "dev"
+    # Fail-closed default: an unconfigured deploy boots as prod and the
+    # validators below refuse to start on dev secrets/wildcards. Local dev and
+    # CI set APP_ENV explicitly (.env / test fixtures).
+    app_env: Literal["dev", "test", "prod"] = "prod"
     log_level: str = "INFO"
 
     # --- database -------------------------------------------------------
@@ -36,12 +39,6 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field(default=_DEV_JWT_SECRET, min_length=32)
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
-
-    @model_validator(mode="after")
-    def _no_dev_secret_in_prod(self) -> "Settings":
-        if self.app_env == "prod" and self.jwt_secret_key == _DEV_JWT_SECRET:
-            raise ValueError("JWT_SECRET_KEY must be set to a real secret when APP_ENV=prod")
-        return self
 
     # --- API hardening ------------------------------------------------------
     cors_origins: list[str] = ["http://localhost:3000"]
@@ -63,6 +60,10 @@ class Settings(BaseSettings):
     # --- ingestion limits ------------------------------------------------------
     max_pdf_pages: int = 1500  # DESIGN targets 500–1000-page docs; hard ceiling above that
     parse_batch_pages: int = 50  # pages per parallel parse task
+    # poison-input ceilings (H3): a crafted page can be under the page limit yet
+    # explode block/table/text extraction memory — cap per page and fail cleanly
+    parse_max_blocks_per_page: int = 10_000
+    parse_max_chars_per_page: int = 2_000_000
 
     # --- chunking (pinned at scaffold review: 300-token children, 12% overlap,
     # measured with the embedding provider's tokenizer) -------------------------
@@ -89,6 +90,8 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 20  # per client IP
     rate_limit_upload_per_minute: int = 60  # per authenticated user
+    rate_limit_chat_per_minute: int = 20  # per user — caps LLM spend (C1)
+    rate_limit_redis_retry_seconds: float = 30.0  # cooldown before retrying Redis (M1)
 
     # --- providers (pinned: CLAUDE.md §2.1 #5/#6) -----------------------------
     llm_provider: Literal["anthropic", "fake"] = "anthropic"
@@ -105,6 +108,32 @@ class Settings(BaseSettings):
     celery_task_time_limit: int = 1800
     celery_task_soft_time_limit: int = 1500
     celery_max_memory_per_child_kb: int = 1024 * 1024  # 1 GiB
+
+    @model_validator(mode="after")
+    def _production_is_locked_down(self) -> "Settings":
+        """In prod, refuse to boot on any dev default that would be a security
+        hole (C2/M3/L3). These fire loudly at startup, never silently."""
+        if self.app_env != "prod":
+            return self
+        problems: list[str] = []
+        if self.jwt_secret_key == _DEV_JWT_SECRET:
+            problems.append("JWT_SECRET_KEY is still the committed dev default")
+        if "*" in self.cors_origins:
+            problems.append("CORS_ORIGINS may not contain '*' (credentials are allowed)")
+        if self.storage_backend == "s3" and (
+            self.s3_access_key_id == "lexa-dev" or self.s3_secret_access_key == "lexa-dev-secret"
+        ):
+            problems.append("S3 credentials are still the dev defaults")
+        if self.llm_provider == "anthropic" and not self.anthropic_api_key:
+            problems.append("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic")
+        if self.embedding_provider == "openai" and not self.openai_api_key:
+            problems.append("OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai")
+        if problems:
+            raise ValueError(
+                "insecure production configuration — set APP_ENV=dev for local use, or fix: "
+                + "; ".join(problems)
+            )
+        return self
 
 
 @lru_cache

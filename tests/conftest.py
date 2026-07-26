@@ -16,6 +16,13 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
+# Settings defaults to APP_ENV=prod (fail-closed, C2). Every path that builds
+# Settings without explicit args in this process — the module-level app in
+# app.main, alembic's env.py, the workers — must see a non-prod env, so set it
+# before any app module is imported below.
+os.environ.setdefault("APP_ENV", "test")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-0123456789abcdef0123456789abcdef")
+
 import psycopg
 import pytest
 from fastapi import FastAPI
@@ -128,6 +135,7 @@ async def db_app(db_settings: Settings, migrated_db_url: str) -> AsyncIterator[F
     NullPool: each test runs in its own event loop, and pooled asyncpg
     connections must not leak across loops.
     """
+    from app.api.deps import get_session_factory
     from app.core.config import get_settings
     from app.db.session import get_db_session
     from app.main import create_app
@@ -142,6 +150,9 @@ async def db_app(db_settings: Settings, migrated_db_url: str) -> AsyncIterator[F
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: db_settings
     app.dependency_overrides[get_db_session] = _session
+    # streaming endpoints open their own short-lived sessions (H1) — point them
+    # at the test engine too
+    app.dependency_overrides[get_session_factory] = lambda: factory
     yield app
     await engine.dispose()
 

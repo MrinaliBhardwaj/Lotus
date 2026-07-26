@@ -8,10 +8,11 @@ same shape as with real S3/MinIO presigning.
 import asyncio
 import json
 import shutil
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from app.core.exceptions import StorageError
-from app.storage.base import ObjectInfo, ObjectStorage
+from app.storage.base import STREAM_CHUNK_BYTES, ObjectInfo, ObjectStorage, PresignedUpload
 
 
 class LocalStorage(ObjectStorage):
@@ -29,9 +30,12 @@ class LocalStorage(ObjectStorage):
     def _meta_path(self, key: str) -> Path:
         return self._path(key + ".meta.json")
 
-    async def presign_upload(self, key: str, *, content_type: str, expires_in: int) -> str:
+    async def presign_upload(
+        self, key: str, *, content_type: str, max_bytes: int, expires_in: int
+    ) -> PresignedUpload:
         self._path(key)  # validate
-        return f"{self._public_base_url}/local-uploads/{key}"
+        # PUT to the authenticated local route, which enforces max_bytes itself
+        return PresignedUpload(url=f"{self._public_base_url}/local-uploads/{key}", method="PUT")
 
     async def presign_download(self, key: str, *, expires_in: int) -> str:
         self._path(key)
@@ -56,8 +60,28 @@ class LocalStorage(ObjectStorage):
         return await asyncio.to_thread(_read)
 
     async def get_range(self, key: str, start: int, end: int) -> bytes:
-        data = await self.get(key)
-        return data[start : end + 1]
+        def _read_range() -> bytes:
+            path = self._path(key)
+            if not path.is_file():
+                raise StorageError(f"object not found: {key}")
+            with path.open("rb") as handle:
+                handle.seek(start)
+                return handle.read(end - start + 1)
+
+        return await asyncio.to_thread(_read_range)
+
+    async def stream(
+        self, key: str, *, chunk_size: int = STREAM_CHUNK_BYTES
+    ) -> AsyncIterator[bytes]:
+        path = self._path(key)
+        if not await asyncio.to_thread(path.is_file):
+            raise StorageError(f"object not found: {key}")
+        handle = await asyncio.to_thread(path.open, "rb")
+        try:
+            while chunk := await asyncio.to_thread(handle.read, chunk_size):
+                yield chunk
+        finally:
+            await asyncio.to_thread(handle.close)
 
     async def head(self, key: str) -> ObjectInfo | None:
         def _stat() -> ObjectInfo | None:

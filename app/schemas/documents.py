@@ -16,6 +16,8 @@ class DocumentCreateResponse(BaseModel):
     id: uuid.UUID
     title: str
     upload_url: str
+    upload_method: str  # "POST" (S3 policy form) or "PUT" (local dev)
+    upload_fields: dict[str, str]  # form fields for a POST upload; empty for PUT
     upload_expires_in: int
     max_upload_bytes: int
 

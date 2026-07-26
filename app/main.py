@@ -10,7 +10,11 @@ from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging
-from app.core.middleware import BodySizeLimitMiddleware, RequestIdMiddleware
+from app.core.middleware import (
+    BodySizeLimitMiddleware,
+    RequestIdMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.db.session import dispose_engines
 
 
@@ -26,7 +30,9 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Lexa", version="0.1.0", lifespan=lifespan)
 
-    # Middleware runs bottom-up: request-id first, then size cap, then CORS.
+    # Middleware runs bottom-up: request-id outermost, then size cap, then CORS,
+    # then security headers closest to the app.
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                        allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(

@@ -7,19 +7,18 @@ ceiling enforced while streaming (this path is exempt from the JSON body-size
 middleware and applies the upload ceiling instead).
 """
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 
-from app.api.deps import CurrentUserId, SettingsDep, StorageDep
-from app.core.exceptions import (
-    NotFoundError,
-    PermissionDeniedError,
-    StorageError,
-    ValidationFailedError,
-)
+from app.api.deps import CurrentUserId, SettingsDep, StorageDep, upload_rate_limit
+from app.core.exceptions import NotFoundError, StorageError, ValidationFailedError
 from app.storage.base import key_owner
 from app.storage.local import LocalStorage
 
-router = APIRouter(prefix="/local-uploads", tags=["local-uploads"])
+router = APIRouter(
+    prefix="/local-uploads",
+    tags=["local-uploads"],
+    dependencies=[Depends(upload_rate_limit)],  # L2 — same per-user cap as the API
+)
 
 
 @router.put("/{key:path}", status_code=200)
@@ -33,7 +32,8 @@ async def upload_local(
     if not isinstance(storage, LocalStorage):
         raise NotFoundError("local uploads are disabled with this storage backend")
     if key_owner(key) != user_id:
-        raise PermissionDeniedError("key does not belong to the authenticated user")
+        # 404, never 403 — don't confirm another tenant's key exists (L4)
+        raise NotFoundError("not found")
 
     body = bytearray()
     async for chunk in request.stream():
@@ -51,7 +51,7 @@ async def download_local(key: str, user_id: CurrentUserId, storage: StorageDep) 
     if not isinstance(storage, LocalStorage):
         raise NotFoundError("local downloads are disabled with this storage backend")
     if key_owner(key) != user_id:
-        raise PermissionDeniedError("key does not belong to the authenticated user")
+        raise NotFoundError("not found")  # 404, never 403 (L4)
     try:
         data = await storage.get(key)
     except StorageError:

@@ -10,7 +10,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core import deps
 from app.core.config import Settings
@@ -87,14 +87,18 @@ async def prepare_ask(
 
 
 async def stream_answer(
-    session: AsyncSession,
+    factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     chat: Chat,
     sources: list[Source],
     question: str,
 ) -> AsyncIterator[str]:
-    """SSE generator for one question; persists the assistant message (with
-    server-resolved citations) after the stream ends."""
+    """SSE generator for one question. Persists the assistant message (with
+    server-resolved citations) in a ``finally`` and through a short-lived
+    session, so a mid-stream client disconnect still records the partial
+    answer instead of stranding a user turn with no reply (M2), and no pooled
+    connection is held for the LLM stream's duration (H1)."""
+    prompt = build_user_prompt(question, sources)
     yield sse_event(
         "sources",
         {
@@ -112,30 +116,45 @@ async def stream_answer(
     )
 
     llm = deps.get_llm_provider(settings)
+    tokenizer = deps.get_embedding_provider(settings).tokenizer
     citation_filter = CitationStreamFilter({s.sid for s in sources})
     answer_parts: list[str] = []
-    async for raw_chunk in llm.stream(
-        system=SYSTEM_PROMPT,
-        user=build_user_prompt(question, sources),
-        max_tokens=settings.llm_max_tokens,
-    ):
-        validated = citation_filter.feed(raw_chunk)
-        if validated:
-            answer_parts.append(validated)
-            yield sse_event("delta", {"text": validated})
-    tail = citation_filter.flush()
-    if tail:
-        answer_parts.append(tail)
-        yield sse_event("delta", {"text": tail})
-
-    citations = resolve_citations(citation_filter.used_sids, sources)
-    message = Message(
-        chat_id=chat.id,
-        role=MessageRole.ASSISTANT,
-        content="".join(answer_parts),
-        citations=citations,
-        token_usage={"model": llm.model},
-    )
-    session.add(message)
-    await session.commit()
-    yield sse_event("done", {"message_id": str(message.id), "citations": citations})
+    completed = False
+    try:
+        async for raw_chunk in llm.stream(
+            system=SYSTEM_PROMPT, user=prompt, max_tokens=settings.llm_max_tokens
+        ):
+            validated = citation_filter.feed(raw_chunk)
+            if validated:
+                answer_parts.append(validated)
+                yield sse_event("delta", {"text": validated})
+        tail = citation_filter.flush()
+        if tail:
+            answer_parts.append(tail)
+            yield sse_event("delta", {"text": tail})
+        completed = True
+    finally:
+        answer = "".join(answer_parts)
+        citations = resolve_citations(citation_filter.used_sids, sources)
+        # tokenizer-based estimate — real vendor usage would come off the
+        # provider response; labeled ``estimated`` so a dashboard isn't misled (M7)
+        usage = {
+            "model": llm.model,
+            "prompt_tokens": tokenizer.count(SYSTEM_PROMPT) + tokenizer.count(prompt),
+            "completion_tokens": tokenizer.count(answer),
+            "estimated": True,
+            "aborted": not completed,
+        }
+        async with factory() as session:
+            message = Message(
+                chat_id=chat.id,
+                role=MessageRole.ASSISTANT,
+                content=answer,
+                citations=citations,
+                token_usage=usage,
+            )
+            session.add(message)
+            await session.commit()
+            message_id = str(message.id)
+    if completed:
+        yield sse_event("done", {"message_id": message_id, "citations": citations})

@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 import redis
 import redis.asyncio as aioredis
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.models import Document, DocumentStatus
@@ -30,10 +30,15 @@ TERMINAL_STATUSES = {DocumentStatus.READY, DocumentStatus.FAILED, DocumentStatus
 
 
 async def progress_stream(
-    session: AsyncSession, settings: Settings, document: Document
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    document_id: uuid.UUID,
+    initial_status: DocumentStatus,
 ) -> AsyncIterator[str]:
-    document_id = document.id
-    last = document.status
+    """Stream status deltas WITHOUT holding a DB connection for the stream's
+    life (H1): the pub/sub wait touches no database, and each fresh status
+    read opens and closes its own short-lived session."""
+    last = initial_status
     yield sse_event(
         "status", {"document_id": str(document_id), "status": last.value, "snapshot": True}
     )
@@ -48,8 +53,8 @@ async def progress_stream(
         pubsub = client.pubsub()
         try:
             await pubsub.subscribe(events.status_channel(document_id))
-            # close the snapshot→subscribe gap
-            current = await _current_status(session, document_id)
+            # close the snapshot→subscribe gap (one short-lived session)
+            current = await _current_status(factory, document_id)
             if current is not None and current != last:
                 last = current
                 yield sse_event(
@@ -73,7 +78,7 @@ async def progress_stream(
         logger.warning("progress(%s): redis unavailable — falling back to DB polling", document_id)
         while time.monotonic() < deadline:
             await asyncio.sleep(settings.progress_poll_interval_seconds)
-            current = await _current_status(session, document_id)
+            current = await _current_status(factory, document_id)
             if current is None:
                 return
             if current != last:
@@ -86,8 +91,9 @@ async def progress_stream(
 
 
 async def _current_status(
-    session: AsyncSession, document_id: uuid.UUID
+    factory: async_sessionmaker[AsyncSession], document_id: uuid.UUID
 ) -> DocumentStatus | None:
-    # a column select bypasses the identity map, so the value is always fresh
-    value = await session.scalar(select(Document.status).where(Document.id == document_id))
+    # short-lived session: never pin a pooled connection across the stream (H1)
+    async with factory() as session:
+        value = await session.scalar(select(Document.status).where(Document.id == document_id))
     return DocumentStatus(value) if value is not None else None
