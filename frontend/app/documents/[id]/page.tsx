@@ -6,7 +6,7 @@ import { use, useEffect, useState } from "react";
 
 import ChatPane from "@/components/ChatPane";
 import PdfViewer from "@/components/PdfViewer";
-import { api, getToken, type ChatOut, type DocumentOut } from "@/lib/api";
+import { api, getToken, type ChatOut, type DocumentOut, type Highlight } from "@/lib/api";
 
 export default function WorkspacePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -14,7 +14,7 @@ export default function WorkspacePage({ params }: { params: Promise<{ id: string
   const [document, setDocument] = useState<DocumentOut | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [chatId, setChatId] = useState<string | null>(null);
-  const [jumpToPage, setJumpToPage] = useState<number | null>(null);
+  const [highlight, setHighlight] = useState<Highlight | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -71,16 +71,16 @@ export default function WorkspacePage({ params }: { params: Promise<{ id: string
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-2">
         <section className="min-h-0 border-r border-slate-200 bg-slate-100">
-          {pdfUrl && <PdfViewer url={pdfUrl} jumpToPage={jumpToPage} />}
+          {pdfUrl && <PdfViewer url={pdfUrl} highlight={highlight} />}
         </section>
         <section className="min-h-0">
           {chatId && (
             <ChatPane
               chatId={chatId}
-              onCite={(page) => {
-                // re-trigger even for the same page
-                setJumpToPage(null);
-                requestAnimationFrame(() => setJumpToPage(page));
+              onCite={(next) => {
+                // re-trigger even when re-clicking the same citation
+                setHighlight(null);
+                requestAnimationFrame(() => setHighlight(next));
               }}
             />
           )}

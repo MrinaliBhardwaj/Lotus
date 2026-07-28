@@ -6,12 +6,16 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { api, type Citation, type MessageOut } from "@/lib/api";
+import { api, type Citation, type Highlight, type MessageOut } from "@/lib/api";
 import { sseFetch } from "@/lib/sse";
 
 interface Props {
   chatId: string;
-  onCite: (page: number) => void;
+  onCite: (highlight: Highlight) => void;
+}
+
+function toHighlight(citation: Citation): Highlight {
+  return { page: citation.page_start, bboxes: citation.bboxes };
 }
 
 interface DisplayMessage {
@@ -29,7 +33,7 @@ function CitedText({
 }: {
   content: string;
   citations: Citation[];
-  onCite: (page: number) => void;
+  onCite: (highlight: Highlight) => void;
 }) {
   const byId = new Map(citations.map((c) => [c.sid, c]));
   const parts = content.split(/(\[S\d+\])/g);
@@ -45,7 +49,7 @@ function CitedText({
             key={index}
             data-testid="citation-chip"
             title={citation.section_path}
-            onClick={() => onCite(citation.page_start)}
+            onClick={() => onCite(toHighlight(citation))}
             className="mx-0.5 inline-flex items-center rounded-md bg-sky-100 px-1.5 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-200"
           >
             p. {citation.page_start}

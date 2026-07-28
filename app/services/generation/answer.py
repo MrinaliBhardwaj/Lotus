@@ -78,8 +78,9 @@ class CitationStreamFilter:
 
 
 def resolve_citations(used_sids: set[int], sources: list[Source]) -> list[dict[str, Any]]:
-    """Page-level resolution from chunk metadata — never from the model.
-    (Bbox highlights are Phase 2; the provenance is already stored.)"""
+    """Page- and bbox-level resolution from chunk metadata — never from the
+    model. ``bboxes`` are the normalized 0–1 rects captured at parse time
+    (invariant 1/2); the viewer overlays them on the cited pages."""
     return [
         {
             "sid": source.sid,
@@ -88,6 +89,7 @@ def resolve_citations(used_sids: set[int], sources: list[Source]) -> list[dict[s
             "page_end": source.chunk.page_end,
             "section_path": source.chunk.section_path,
             "section_title": source.chunk.section_title,
+            "bboxes": source.chunk.bboxes,
         }
         for source in sources
         if source.sid in used_sids

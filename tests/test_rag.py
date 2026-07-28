@@ -167,6 +167,12 @@ async def test_ask_question_streams_cited_answer(
     assert citations and citations[0]["sid"] == 1
     assert citations[0]["page_start"] >= 1  # page resolved server-side, not by the model
     assert all(c["sid"] != 99 for c in citations)
+    # bbox highlights (Phase 2): normalized rects resolved from chunk provenance
+    bboxes = citations[0]["bboxes"]
+    assert bboxes and all(
+        0.0 <= v <= 1.0 for box in bboxes for v in box["rect"]
+    ), "citation bboxes must be normalized 0–1"
+    assert all(box["page"] >= 1 for box in bboxes)
 
     # both messages persisted; assistant carries the resolved citations
     history = await db_client.get(f"/chats/{chat_id}/messages", headers=headers)

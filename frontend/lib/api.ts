@@ -105,6 +105,11 @@ export interface ChatOut {
   title: string | null;
 }
 
+export interface BBox {
+  page: number; // 1-based
+  rect: [number, number, number, number]; // normalized [x0, y0, x1, y1]
+}
+
 export interface Citation {
   sid: number;
   chunk_id: string;
@@ -112,6 +117,13 @@ export interface Citation {
   page_end: number;
   section_path: string;
   section_title: string | null;
+  bboxes: BBox[];
+}
+
+/** A highlight target the viewer draws + scrolls to. */
+export interface Highlight {
+  page: number; // page to scroll to (first cited page)
+  bboxes: BBox[]; // all normalized rects to overlay
 }
 
 export interface MessageOut {

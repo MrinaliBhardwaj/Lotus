@@ -1,17 +1,18 @@
 "use client";
 
-/** PDF.js page viewer (Phase 1: page rendering + jump-to-page; the Phase 2
- * bbox highlight overlay mounts on top of these same page containers).
- * Pages render lazily via IntersectionObserver so 1000-page documents don't
- * rasterize up front. */
+/** PDF.js page viewer with a citation highlight overlay. Pages render lazily
+ * via IntersectionObserver so 1000-page documents don't rasterize up front;
+ * highlight rects are drawn as absolutely-positioned divs using the normalized
+ * (0–1) bboxes captured at parse time, so they scale with the rendered page
+ * without any pixel math. */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { authHeaders } from "@/lib/api";
+import { authHeaders, type Highlight } from "@/lib/api";
 
 interface Props {
   url: string; // absolute (S3 presigned) or API-relative (local dev route)
-  jumpToPage: number | null; // 1-based; changes trigger a scroll
+  highlight: Highlight | null; // changes trigger a scroll + overlay redraw
 }
 
 interface PdfjsModule {
@@ -29,13 +30,22 @@ interface PdfPage {
   render: (options: object) => { promise: Promise<void> };
 }
 
-export default function PdfViewer({ url, jumpToPage }: Props) {
+export default function PdfViewer({ url, highlight }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef(new Map<number, HTMLDivElement>());
   const [pdf, setPdf] = useState<PdfDocument | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [flashPage, setFlashPage] = useState<number | null>(null);
+
+  // group the citation's rects by page so each page container draws its own
+  const rectsByPage = useMemo(() => {
+    const map = new Map<number, [number, number, number, number][]>();
+    for (const box of highlight?.bboxes ?? []) {
+      (map.get(box.page) ?? map.set(box.page, []).get(box.page)!).push(box.rect);
+    }
+    return map;
+  }, [highlight]);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,15 +97,15 @@ export default function PdfViewer({ url, jumpToPage }: Props) {
   }, [pdf, pageCount]);
 
   useEffect(() => {
-    if (jumpToPage === null) return;
-    const element = pageRefs.current.get(jumpToPage);
+    if (highlight === null) return;
+    const element = pageRefs.current.get(highlight.page);
     if (element) {
       element.scrollIntoView({ behavior: "smooth", block: "start" });
-      setFlashPage(jumpToPage);
+      setFlashPage(highlight.page);
       const timer = setTimeout(() => setFlashPage(null), 1600);
       return () => clearTimeout(timer);
     }
-  }, [jumpToPage]);
+  }, [highlight]);
 
   if (error) {
     return <p className="p-6 text-sm text-red-600">{error}</p>;
@@ -120,6 +130,21 @@ export default function PdfViewer({ url, jumpToPage }: Props) {
             <span className="absolute left-2 top-2 z-10 rounded bg-slate-900/70 px-1.5 py-0.5 text-[10px] text-white">
               p. {pageNumber}
             </span>
+            {/* citation highlight overlay — normalized rects → CSS percentages,
+                so they scale with the rendered page automatically */}
+            {(rectsByPage.get(pageNumber) ?? []).map(([x0, y0, x1, y1], index) => (
+              <div
+                key={index}
+                data-testid={`highlight-${pageNumber}`}
+                className="pointer-events-none absolute z-20 rounded-sm bg-amber-300/40 ring-1 ring-amber-500/70 mix-blend-multiply"
+                style={{
+                  left: `${x0 * 100}%`,
+                  top: `${y0 * 100}%`,
+                  width: `${(x1 - x0) * 100}%`,
+                  height: `${(y1 - y0) * 100}%`,
+                }}
+              />
+            ))}
           </div>
         ))}
       </div>
